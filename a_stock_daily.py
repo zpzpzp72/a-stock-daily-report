@@ -49,15 +49,57 @@ _trade_calendar_cache = None
 
 
 def _get_trade_calendar():
-    """获取A股交易日历（全局缓存，只调用一次）"""
+    """获取A股交易日历（全局缓存，只调用一次）
+    
+    使用纯算法计算：排除周末和常见节假日。
+    由于AKShare在WSL中无法访问，改用本地算法计算。
+    """
     global _trade_calendar_cache
     
     if _trade_calendar_cache is not None:
         return _trade_calendar_cache
     
-    import akshare as ak
-    print("获取A股交易日历...")
-    df = ak.tool_trade_date_hist_sina()
+    import pandas as pd
+    from datetime import datetime, timedelta
+    
+    print("计算A股交易日历（本地算法）...")
+    
+    # 生成过去2年和未来1年的所有日期
+    today = datetime.now()
+    start_date = today - timedelta(days=730)  # 过去2年
+    end_date = today + timedelta(days=365)    # 未来1年
+    
+    # 中国2025-2026年主要节假日（简单估算）
+    holidays = [
+        # 2025年
+        '2025-01-01', '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31',
+        '2025-02-01', '2025-02-02', '2025-02-03', '2025-02-04',
+        '2025-04-04', '2025-04-05', '2025-04-06',
+        '2025-05-01', '2025-05-02', '2025-05-03',
+        '2025-06-09', '2025-06-10',
+        '2025-09-15', '2025-09-16', '2025-09-17',
+        '2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07',
+        # 2026年
+        '2026-01-01', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
+        '2026-02-01', '2026-02-02',
+        '2026-04-04', '2026-04-05', '2026-04-06',
+        '2026-05-01', '2026-05-02', '2026-05-03',
+        '2026-06-19', '2026-06-20',
+        '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07',
+    ]
+    holiday_dates = set(datetime.strptime(h, '%Y-%m-%d').date() for h in holidays)
+    
+    # 生成交易日列表
+    trade_dates = []
+    current = start_date
+    while current <= end_date:
+        # 排除周末 (5=周六, 6=周日)
+        if current.weekday() < 5 and current.date() not in holiday_dates:
+            trade_dates.append(current.date())
+        current += timedelta(days=1)
+    
+    # 创建DataFrame
+    df = pd.DataFrame({'trade_date': trade_dates})
     _trade_calendar_cache = df
     print(f"交易日历已缓存，共 {len(df)} 条记录")
     return df
@@ -607,7 +649,7 @@ def analyze_stock(stock):
         return None
     
     # 计算买卖点信号
-    signals = calculate_buy_sell_signals(df)
+    signals = calculate_buy_sell_signals(df, ind)
     
     return {
         "name": stock['name'],
@@ -618,55 +660,69 @@ def analyze_stock(stock):
     }
 
 
-def calculate_buy_sell_signals(df):
-    """根据技术指标计算买卖点信号"""
+def calculate_buy_sell_signals(df, indicators=None):
+    """根据技术指标计算买卖点信号
+    
+    Args:
+        df: 股票数据DataFrame
+        indicators: 可选的预计算技术指标字典，如果提供则复用这些指标，避免重复计算
+    """
     import numpy as np
     
     if df is None or len(df) < 20:
         return None
     
-    # 重命名列
-    df = df.rename(columns={'收盘': 'close', '最高': 'high', '最低': 'low'})
-    
-    close = df['close'].astype(float).values
-    high = df['high'].astype(float).values
-    low = df['low'].astype(float).values
-    
-    # 计算均线
-    ma5 = np.mean(close[-5:])
-    ma10 = np.mean(close[-10:])
-    ma20 = np.mean(close[-20:])
-    
-    # 计算KDJ
-    lowest_low = np.min(low[-9:])
-    highest_high = np.max(high[-9:])
-    if highest_high - lowest_low == 0:
-        rsv = 50
+    # 如果提供了预计算的指标，直接使用
+    if indicators is not None:
+        ma5 = indicators.get('MA5', 0)
+        ma20 = indicators.get('MA20', 0)
+        j = indicators.get('KDJ_J', 0)
+        rsi = indicators.get('RSI', 50)
+        macd = indicators.get('MACD', 0)
     else:
-        rsv = (close[-1] - lowest_low) / (highest_high - lowest_low) * 100
-    k = 2/3 * 50 + 1/3 * rsv
-    d = 2/3 * 50 + 1/3 * k
-    j = 3 * k - 2 * d
-    
-    # 计算RSI
-    delta = np.diff(close)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-14:])
-    avg_loss = np.mean(loss[-14:])
-    if avg_loss == 0:
-        rsi = 100
-    else:
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-    
-    # 计算MACD
-    ema12 = close.copy()
-    ema20 = close.copy()
-    for i in range(1, len(close)):
-        ema12[i] = ema12[i-1] * (1-2/(10+1)) + close[i] * (2/(10+1))
-        ema20[i] = ema20[i-1] * (1-2/(20+1)) + close[i] * (2/(20+1))
-    macd = ema12[-1] - ema20[-1]
+        # 否则重新计算（向后兼容）
+        # 重命名列
+        df = df.rename(columns={'收盘': 'close', '最高': 'high', '最低': 'low'})
+        
+        close = df['close'].astype(float).values
+        high = df['high'].astype(float).values
+        low = df['low'].astype(float).values
+        
+        # 计算均线
+        ma5 = np.mean(close[-5:])
+        ma10 = np.mean(close[-10:])
+        ma20 = np.mean(close[-20:])
+        
+        # 计算KDJ
+        lowest_low = np.min(low[-9:])
+        highest_high = np.max(high[-9:])
+        if highest_high - lowest_low == 0:
+            rsv = 50
+        else:
+            rsv = (close[-1] - lowest_low) / (highest_high - lowest_low) * 100
+        k = 2/3 * 50 + 1/3 * rsv
+        d = 2/3 * 50 + 1/3 * k
+        j = 3 * k - 2 * d
+        
+        # 计算RSI
+        delta = np.diff(close)
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        avg_gain = np.mean(gain[-14:])
+        avg_loss = np.mean(loss[-14:])
+        if avg_loss == 0:
+            rsi = 100
+        else:
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+        
+        # 计算MACD
+        ema12 = close.copy()
+        ema20 = close.copy()
+        for i in range(1, len(close)):
+            ema12[i] = ema12[i-1] * (1-2/(10+1)) + close[i] * (2/(10+1))
+            ema20[i] = ema20[i-1] * (1-2/(20+1)) + close[i] * (2/(20+1))
+        macd = ema12[-1] - ema20[-1]
     
     signals = {}
     
@@ -677,12 +733,20 @@ def calculate_buy_sell_signals(df):
         signals["ma_cross"] = "MA5<MA20 (下跌趋势)"
     
     # KDJ信号
+    # 当使用预计算指标时，需要从 indicators 获取 k 和 d 值
+    if indicators is not None:
+        k_val = indicators.get('KDJ_K', 50)
+        d_val = indicators.get('KDJ_D', 50)
+    else:
+        k_val = k
+        d_val = d
+    
     if j > 100:
         signals["kdj"] = "J={:.1f} 超买".format(j)
     elif j < 0:
         signals["kdj"] = "J={:.1f} 超卖".format(j)
     else:
-        signals["kdj"] = "K={:.1f} D={:.1f}".format(k, d)
+        signals["kdj"] = "K={:.1f} D={:.1f}".format(k_val, d_val)
     
     # RSI信号
     if rsi > 70:
@@ -1076,7 +1140,7 @@ def send_email(html_report, subject_prefix="", skip_charts=False):
     
     # 方法2: 回退到 Gmail
     print("QQ邮箱发送失败，尝试使用 Gmail...")
-    send_via_gmail(html_report, subject_prefix)
+    send_via_gmail(html_report, subject_prefix, chart_paths)
     return html_report
 
 
@@ -1086,6 +1150,7 @@ def send_via_qq_smtp(html_report, subject):
     from email.mime.multipart import MIMEMultipart
 
     from email.mime.text import MIMEText
+    from email.mime.image import MIMEImage
     
     qq_email = "9892890@qq.com"
     qq_password = "dqwervcgpylbbgcg"  # QQ邮箱 SMTP 授权码
@@ -1108,12 +1173,13 @@ def send_via_qq_smtp(html_report, subject):
         return False
 
 
-def send_via_gmail(html_report, subject_prefix=""):
+def send_via_gmail(html_report, subject_prefix="", chart_paths=None):
     """通过 Gmail SMTP 发送"""
     import smtplib
     from email.mime.multipart import MIMEMultipart
 
     from email.mime.text import MIMEText
+    from email.mime.image import MIMEImage
     
     smtp_password = os.environ.get("GMAIL_SMTP_PASSWORD")
     if not smtp_password:

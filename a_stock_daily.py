@@ -20,6 +20,81 @@ from email.mime.multipart import MIMEMultipart
 # 设置 Gmail 密码
 os.environ.setdefault("GMAIL_SMTP_PASSWORD", "lepyvjiimtfmsqpv")
 
+# DeepSeek API 配置（可选，如果需要AI分析）
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+
+def analyze_with_llm(stock_code, stock_name, indicators, signals, score):
+    """使用 LLM 进行 AI 分析 (可选功能)
+    
+    Args:
+        stock_code: 股票代码
+        stock_name: 股票名称
+        indicators: 技术指标字典
+        signals: 买卖信号字典
+        score: 1-5评分
+    
+    Returns:
+        str: AI 分析结果，如果失败返回 None
+    """
+    if not DEEPSEEK_API_KEY:
+        return None
+    
+    try:
+        import requests
+        
+        # 构建分析提示
+        prompt = f"""请分析股票 {stock_name} ({stock_code})，给出简洁的投资建议。
+
+当前评分: {score}/5分 ({"强烈看涨" if score == 5 else "看涨" if score == 4 else "偏多" if score == 3 else "中性" if score == 2 else "看跌"})
+
+技术指标:
+- 收盘价: {indicators.get('CLOSE', 'N/A')}
+- 涨跌幅: {indicators.get('CHANGE_PCT', 'N/A')}%
+- MACD: {indicators.get('MACD', 'N/A'):.2f} ({"金叉" if indicators.get('MACD_hist', 0) > 0 else "死叉"})
+- KDJ J值: {indicators.get('KDJ_J', 'N/A'):.1f} ({"超买" if indicators.get('KDJ_J', 50) > 100 else "超卖" if indicators.get('KDJ_J', 50) < 0 else "正常"})
+- RSI: {indicators.get('RSI', 'N/A'):.1f} ({"超买" if indicators.get('RSI', 50) > 70 else "超卖" if indicators.get('RSI', 50) < 30 else "正常"})
+- BOLL: {indicators.get('BOLL_LOW', 'N/A'):.2f} ~ {indicators.get('BOLL_UP', 'N/A'):.2f}
+
+当前信号:
+{signals.get('recommendation', '无')}
+
+请用50字以内给出简短分析和建议。"""
+        
+        # 调用 DeepSeek API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 200,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(
+            f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['choices'][0]['message']['content']
+        else:
+            print(f"  ⚠️ LLM API 错误: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"  ⚠️ LLM 分析失败: {e}")
+        return None
+
+
 # 不使用代理
 
 # 判断是否为ETF (ETF代码通常以 15xxxx 开头)
@@ -41,8 +116,12 @@ STOCKS = [
     {"code": "159672", "name": "消费ETF博时"},
 ]
 
-RECIPIENTS = ["42194972@qq.com", "wlpyc@126.com", "9892890@qq.com"]
-SENDER_EMAIL = "zhiping2007@gmail.com"
+RECIPIENTS = ["9892890@qq.com", "42194972@qq.com"]
+# 默认发件：QQ邮箱 (主)，Gmail (备份)
+# 发送逻辑：先尝试QQ-SMTP，失败则自动切换到Gmail-SMTP
+QQ_SENDER_EMAIL = "9892890@qq.com"
+QQ_SMTP_PASSWORD = "dqwervcgpylbbgcg"
+GMAIL_SENDER_EMAIL = "zhiping2007@gmail.com"
 
 # 全局交易日历缓存
 _trade_calendar_cache = None
@@ -800,6 +879,108 @@ def calculate_buy_sell_signals(df, indicators=None):
     return signals
 
 
+def calculate_score_1_5(indicators, signals):
+    """计算1-5分评分系统 (Ashare-AI-Strategy-Analyst风格)
+    
+    基于买入/卖出信号数量计算评分：
+    - 5分: 强烈看涨
+    - 4分: 看涨
+    - 3分: 偏多
+    - 2分: 中性
+    - 1分: 看跌
+    
+    Args:
+        indicators: 技术指标字典
+        signals: 买卖信号字典
+    """
+    if indicators is None or signals is None:
+        return 2, "数据不足"
+    
+    buy_signals = []
+    sell_signals = []
+    
+    # 从 signals 中统计买入/卖出信号关键词
+    signal_text = str(signals.values())
+    
+    # 买入信号关键词
+    buy_keywords = ['上涨', '反弹', '金叉', '超卖', '买入', '看涨', '突破']
+    for kw in buy_keywords:
+        if kw in signal_text:
+            buy_signals.append(kw)
+    
+    # 卖出信号关键词  
+    sell_keywords = ['下跌', '回调', '死叉', '超买', '卖出', '看跌', '跌破']
+    for kw in sell_keywords:
+        if kw in signal_text:
+            sell_signals.append(kw)
+    
+    # 基于指标额外判断
+    try:
+        # MACD 金叉/死叉
+        macd_hist = indicators.get('MACD_hist', 0)
+        if macd_hist > 0:
+            buy_signals.append('MACD金叉')
+        elif macd_hist < 0:
+            sell_signals.append('MACD死叉')
+        
+        # KDJ 超卖/超买
+        kdj_j = indicators.get('KDJ_J', 50)
+        if kdj_j < 0:
+            buy_signals.append('KDJ超卖')
+        elif kdj_j > 100:
+            sell_signals.append('KDJ超买')
+        
+        # RSI 超卖/超买
+        rsi = indicators.get('RSI', 50)
+        if rsi < 30:
+            buy_signals.append('RSI超卖')
+        elif rsi > 70:
+            sell_signals.append('RSI超买')
+        
+        # 均线趋势
+        ma5 = indicators.get('MA5', 0)
+        ma20 = indicators.get('MA20', 0)
+        if ma5 > ma20:
+            buy_signals.append('MA多头')
+        elif ma5 < ma20:
+            sell_signals.append('MA空头')
+            
+    except Exception:
+        pass
+    
+    # 计算评分
+    buy_count = len(buy_signals)
+    sell_count = len(sell_signals)
+    total = buy_count + sell_count
+    
+    if total == 0:
+        return 2, "中性"
+    
+    if buy_count > sell_count:
+        # 看涨: 3-5分
+        score = 3 + (buy_count / total) * 2
+        score = min(5, max(3, round(score)))
+        signal = "🟢 看涨"
+    elif sell_count > buy_count:
+        # 看跌: 1-2分
+        score = 3 - (sell_count / total) * 2
+        score = min(2, max(1, round(score)))
+        signal = "🔴 看跌"
+    else:
+        # 中性
+        score = 2
+        signal = "🟡 中性"
+    
+    # 详细说明
+    detail = f"买入信号{buy_count}个" if buy_count > 0 else ""
+    if detail and sell_count > 0:
+        detail += ", "
+    if sell_count > 0:
+        detail += f"卖出信号{sell_count}个"
+    
+    return score, signal, detail
+
+
 def generate_stock_chart(stock_code, stock_name):
     """生成A股股票3个月走势图（使用腾讯财经数据）"""
     try:
@@ -956,6 +1137,19 @@ def generate_report(stock_analyses, delay_reason=""):
         ind = analysis['indicators']
         change_pct = ind.get('CHANGE_PCT', 0)
         
+        # 计算1-5评分
+        stock_signals = analysis.get('signals', {})
+        score, score_signal, score_detail = calculate_score_1_5(ind, stock_signals)
+        
+        # AI 分析 (可选)
+        ai_analysis = None
+        if DEEPSEEK_API_KEY:
+            print(f"  🤖 正在调用 AI 分析...")
+            ai_analysis = analyze_with_llm(
+                analysis['code'], analysis['name'], 
+                ind, stock_signals, score
+            )
+        
         # 判断趋势
         if ind['MA5'] > ind['MA20']:
             trend = "📈 上涨"
@@ -1008,6 +1202,13 @@ def generate_report(stock_analyses, delay_reason=""):
             <div>
                 <div class="stock-name">{analysis['name']}</div>
                 <div class="stock-code">{analysis['code']} | 数据日期: {analysis['data_date']}</div>
+                <div style="margin-top: 8px;">
+                    <span style="display: inline-block; padding: 5px 12px; border-radius: 6px; font-size: 16px; font-weight: bold; background: {'#4caf50' if score >= 4 else '#8bc34a' if score == 3 else '#ff9800' if score == 2 else '#f44336'}; color: white;">
+                        {score}分 {score_signal}
+                    </span>
+                    <span style="color: #666; font-size: 12px; margin-left: 8px;">{score_detail}</span>
+                </div>
+                {f'<div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border-radius: 6px; border-left: 3px solid #2196f3;"><span style="color: #1976d2; font-size: 12px; font-weight: bold;">🤖 AI分析:</span> <span style="color: #333; font-size: 12px;">{ai_analysis}</span></div>' if ai_analysis else ''}
             </div>
             <div style="text-align: right;">
                 <div class="price {price_class}">¥{ind['CLOSE']:.2f}</div>
@@ -1092,8 +1293,24 @@ def generate_report(stock_analyses, delay_reason=""):
     
     html += """
     <p style="text-align: center; color: #999; font-size: 12px; margin-top: 30px;">
-        由 OpenClaw 自动生成 | 数据来源: AKShare (2026年最新数据)
+        由 OpenClaw 自动生成 | 数据来源: 腾讯财经
     </p>
+    
+    <!-- 1-5分评分说明 -->
+    <div style="background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 20px auto; max-width: 600px;">
+        <h4 style="margin: 0 0 10px 0; color: #333; font-size: 14px;">📊 1-5分评分说明</h4>
+        <table style="width: 100%; font-size: 12px; color: #666;">
+            <tr>
+                <td style="padding: 3px 0;"><span style="background: #4caf50; color: white; padding: 2px 8px; border-radius: 4px;">5分</span> 强烈看涨</td>
+                <td style="padding: 3px 0;"><span style="background: #8bc34a; color: white; padding: 2px 8px; border-radius: 4px;">4分</span> 看涨</td>
+                <td style="padding: 3px 0;"><span style="background: #ff9800; color: white; padding: 2px 8px; border-radius: 4px;">2分</span> 中性</td>
+                <td style="padding: 3px 0;"><span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 4px;">1分</span> 看跌</td>
+            </tr>
+        </table>
+        <p style="font-size: 11px; color: #999; margin: 8px 0 0 0;">
+            评分基于MACD/KDJ/RSI/均线等技术指标的买入/卖出信号数量计算
+        </p>
+    </div>
 </body>
 </html>
 """
@@ -1162,8 +1379,9 @@ def send_via_qq_smtp(html_report, subject):
     msg.attach(MIMEText(html_report, 'html'))
     
     try:
-        # QQ邮箱 SMTP: smtp.qq.com, 端口 465 (SSL)
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+        # QQ邮箱 SMTP: smtp.qq.com, 端口 587 (STARTTLS)
+        server = smtplib.SMTP("smtp.qq.com", 587)
+        server.starttls()
         server.login(qq_email, qq_password)
         server.send_message(msg)
         server.quit()
@@ -1189,7 +1407,7 @@ def send_via_gmail(html_report, subject_prefix="", chart_paths=None):
     subject = f"{subject_prefix}A股每日观察 - {datetime.now().strftime('%Y-%m-%d')}"
     
     msg = MIMEMultipart('alternative')
-    msg['From'] = SENDER_EMAIL
+    msg['From'] = GMAIL_SENDER_EMAIL
     msg['To'] = ", ".join(RECIPIENTS)
     msg['Subject'] = subject
     msg.attach(MIMEText(html_report, 'html'))
@@ -1208,7 +1426,7 @@ def send_via_gmail(html_report, subject_prefix="", chart_paths=None):
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
-            server.login(SENDER_EMAIL, smtp_password)
+            server.login(GMAIL_SENDER_EMAIL, smtp_password)
             server.send_message(msg)
         print("✅ 邮件发送成功 (Gmail)!")
         return True

@@ -20,6 +20,81 @@ from email.mime.multipart import MIMEMultipart
 # 设置 Gmail 密码
 os.environ.setdefault("GMAIL_SMTP_PASSWORD", "lepyvjiimtfmsqpv")
 
+# DeepSeek API 配置（可选，如果需要AI分析）
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+
+def analyze_with_llm(stock_code, stock_name, indicators, signals, score):
+    """使用 LLM 进行 AI 分析 (可选功能)
+    
+    Args:
+        stock_code: 股票代码
+        stock_name: 股票名称
+        indicators: 技术指标字典
+        signals: 买卖信号字典
+        score: 1-5评分
+    
+    Returns:
+        str: AI 分析结果，如果失败返回 None
+    """
+    if not DEEPSEEK_API_KEY:
+        return None
+    
+    try:
+        import requests
+        
+        # 构建分析提示
+        prompt = f"""请分析股票 {stock_name} ({stock_code})，给出简洁的投资建议。
+
+当前评分: {score}/5分 ({"强烈看涨" if score == 5 else "看涨" if score == 4 else "偏多" if score == 3 else "中性" if score == 2 else "看跌"})
+
+技术指标:
+- 收盘价: {indicators.get('CLOSE', 'N/A')}
+- 涨跌幅: {indicators.get('CHANGE_PCT', 'N/A')}%
+- MACD: {indicators.get('MACD', 'N/A'):.2f} ({"金叉" if indicators.get('MACD_hist', 0) > 0 else "死叉"})
+- KDJ J值: {indicators.get('KDJ_J', 'N/A'):.1f} ({"超买" if indicators.get('KDJ_J', 50) > 100 else "超卖" if indicators.get('KDJ_J', 50) < 0 else "正常"})
+- RSI: {indicators.get('RSI', 'N/A'):.1f} ({"超买" if indicators.get('RSI', 50) > 70 else "超卖" if indicators.get('RSI', 50) < 30 else "正常"})
+- BOLL: {indicators.get('BOLL_LOW', 'N/A'):.2f} ~ {indicators.get('BOLL_UP', 'N/A'):.2f}
+
+当前信号:
+{signals.get('recommendation', '无')}
+
+请用50字以内给出简短分析和建议。"""
+        
+        # 调用 DeepSeek API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 200,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(
+            f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['choices'][0]['message']['content']
+        else:
+            print(f"  ⚠️ LLM API 错误: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"  ⚠️ LLM 分析失败: {e}")
+        return None
+
+
 # 不使用代理
 
 # 判断是否为ETF (ETF代码通常以 15xxxx 开头)
@@ -1066,6 +1141,15 @@ def generate_report(stock_analyses, delay_reason=""):
         stock_signals = analysis.get('signals', {})
         score, score_signal, score_detail = calculate_score_1_5(ind, stock_signals)
         
+        # AI 分析 (可选)
+        ai_analysis = None
+        if DEEPSEEK_API_KEY:
+            print(f"  🤖 正在调用 AI 分析...")
+            ai_analysis = analyze_with_llm(
+                analysis['code'], analysis['name'], 
+                ind, stock_signals, score
+            )
+        
         # 判断趋势
         if ind['MA5'] > ind['MA20']:
             trend = "📈 上涨"
@@ -1124,6 +1208,7 @@ def generate_report(stock_analyses, delay_reason=""):
                     </span>
                     <span style="color: #666; font-size: 12px; margin-left: 8px;">{score_detail}</span>
                 </div>
+                {f'<div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border-radius: 6px; border-left: 3px solid #2196f3;"><span style="color: #1976d2; font-size: 12px; font-weight: bold;">🤖 AI分析:</span> <span style="color: #333; font-size: 12px;">{ai_analysis}</span></div>' if ai_analysis else ''}
             </div>
             <div style="text-align: right;">
                 <div class="price {price_class}">¥{ind['CLOSE']:.2f}</div>

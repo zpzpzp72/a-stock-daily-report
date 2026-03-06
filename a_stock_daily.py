@@ -41,8 +41,12 @@ STOCKS = [
     {"code": "159672", "name": "消费ETF博时"},
 ]
 
-RECIPIENTS = ["42194972@qq.com", "wlpyc@126.com", "9892890@qq.com"]
-SENDER_EMAIL = "zhiping2007@gmail.com"
+RECIPIENTS = ["9892890@qq.com", "42194972@qq.com"]
+# 默认发件：QQ邮箱 (主)，Gmail (备份)
+# 发送逻辑：先尝试QQ-SMTP，失败则自动切换到Gmail-SMTP
+QQ_SENDER_EMAIL = "9892890@qq.com"
+QQ_SMTP_PASSWORD = "dqwervcgpylbbgcg"
+GMAIL_SENDER_EMAIL = "zhiping2007@gmail.com"
 
 # 全局交易日历缓存
 _trade_calendar_cache = None
@@ -1162,8 +1166,9 @@ def send_via_qq_smtp(html_report, subject):
     msg.attach(MIMEText(html_report, 'html'))
     
     try:
-        # QQ邮箱 SMTP: smtp.qq.com, 端口 465 (SSL)
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
+        # QQ邮箱 SMTP: smtp.qq.com, 端口 587 (STARTTLS)
+        server = smtplib.SMTP("smtp.qq.com", 587)
+        server.starttls()
         server.login(qq_email, qq_password)
         server.send_message(msg)
         server.quit()
@@ -1189,7 +1194,7 @@ def send_via_gmail(html_report, subject_prefix="", chart_paths=None):
     subject = f"{subject_prefix}A股每日观察 - {datetime.now().strftime('%Y-%m-%d')}"
     
     msg = MIMEMultipart('alternative')
-    msg['From'] = SENDER_EMAIL
+    msg['From'] = GMAIL_SENDER_EMAIL
     msg['To'] = ", ".join(RECIPIENTS)
     msg['Subject'] = subject
     msg.attach(MIMEText(html_report, 'html'))
@@ -1208,7 +1213,7 @@ def send_via_gmail(html_report, subject_prefix="", chart_paths=None):
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
-            server.login(SENDER_EMAIL, smtp_password)
+            server.login(GMAIL_SENDER_EMAIL, smtp_password)
             server.send_message(msg)
         print("✅ 邮件发送成功 (Gmail)!")
         return True

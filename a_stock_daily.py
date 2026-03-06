@@ -804,6 +804,108 @@ def calculate_buy_sell_signals(df, indicators=None):
     return signals
 
 
+def calculate_score_1_5(indicators, signals):
+    """计算1-5分评分系统 (Ashare-AI-Strategy-Analyst风格)
+    
+    基于买入/卖出信号数量计算评分：
+    - 5分: 强烈看涨
+    - 4分: 看涨
+    - 3分: 偏多
+    - 2分: 中性
+    - 1分: 看跌
+    
+    Args:
+        indicators: 技术指标字典
+        signals: 买卖信号字典
+    """
+    if indicators is None or signals is None:
+        return 2, "数据不足"
+    
+    buy_signals = []
+    sell_signals = []
+    
+    # 从 signals 中统计买入/卖出信号关键词
+    signal_text = str(signals.values())
+    
+    # 买入信号关键词
+    buy_keywords = ['上涨', '反弹', '金叉', '超卖', '买入', '看涨', '突破']
+    for kw in buy_keywords:
+        if kw in signal_text:
+            buy_signals.append(kw)
+    
+    # 卖出信号关键词  
+    sell_keywords = ['下跌', '回调', '死叉', '超买', '卖出', '看跌', '跌破']
+    for kw in sell_keywords:
+        if kw in signal_text:
+            sell_signals.append(kw)
+    
+    # 基于指标额外判断
+    try:
+        # MACD 金叉/死叉
+        macd_hist = indicators.get('MACD_hist', 0)
+        if macd_hist > 0:
+            buy_signals.append('MACD金叉')
+        elif macd_hist < 0:
+            sell_signals.append('MACD死叉')
+        
+        # KDJ 超卖/超买
+        kdj_j = indicators.get('KDJ_J', 50)
+        if kdj_j < 0:
+            buy_signals.append('KDJ超卖')
+        elif kdj_j > 100:
+            sell_signals.append('KDJ超买')
+        
+        # RSI 超卖/超买
+        rsi = indicators.get('RSI', 50)
+        if rsi < 30:
+            buy_signals.append('RSI超卖')
+        elif rsi > 70:
+            sell_signals.append('RSI超买')
+        
+        # 均线趋势
+        ma5 = indicators.get('MA5', 0)
+        ma20 = indicators.get('MA20', 0)
+        if ma5 > ma20:
+            buy_signals.append('MA多头')
+        elif ma5 < ma20:
+            sell_signals.append('MA空头')
+            
+    except Exception:
+        pass
+    
+    # 计算评分
+    buy_count = len(buy_signals)
+    sell_count = len(sell_signals)
+    total = buy_count + sell_count
+    
+    if total == 0:
+        return 2, "中性"
+    
+    if buy_count > sell_count:
+        # 看涨: 3-5分
+        score = 3 + (buy_count / total) * 2
+        score = min(5, max(3, round(score)))
+        signal = "🟢 看涨"
+    elif sell_count > buy_count:
+        # 看跌: 1-2分
+        score = 3 - (sell_count / total) * 2
+        score = min(2, max(1, round(score)))
+        signal = "🔴 看跌"
+    else:
+        # 中性
+        score = 2
+        signal = "🟡 中性"
+    
+    # 详细说明
+    detail = f"买入信号{buy_count}个" if buy_count > 0 else ""
+    if detail and sell_count > 0:
+        detail += ", "
+    if sell_count > 0:
+        detail += f"卖出信号{sell_count}个"
+    
+    return score, signal, detail
+
+
 def generate_stock_chart(stock_code, stock_name):
     """生成A股股票3个月走势图（使用腾讯财经数据）"""
     try:
@@ -960,6 +1062,10 @@ def generate_report(stock_analyses, delay_reason=""):
         ind = analysis['indicators']
         change_pct = ind.get('CHANGE_PCT', 0)
         
+        # 计算1-5评分
+        stock_signals = analysis.get('signals', {})
+        score, score_signal, score_detail = calculate_score_1_5(ind, stock_signals)
+        
         # 判断趋势
         if ind['MA5'] > ind['MA20']:
             trend = "📈 上涨"
@@ -1012,6 +1118,12 @@ def generate_report(stock_analyses, delay_reason=""):
             <div>
                 <div class="stock-name">{analysis['name']}</div>
                 <div class="stock-code">{analysis['code']} | 数据日期: {analysis['data_date']}</div>
+                <div style="margin-top: 8px;">
+                    <span style="display: inline-block; padding: 5px 12px; border-radius: 6px; font-size: 16px; font-weight: bold; background: {'#4caf50' if score >= 4 else '#8bc34a' if score == 3 else '#ff9800' if score == 2 else '#f44336'}; color: white;">
+                        {score}分 {score_signal}
+                    </span>
+                    <span style="color: #666; font-size: 12px; margin-left: 8px;">{score_detail}</span>
+                </div>
             </div>
             <div style="text-align: right;">
                 <div class="price {price_class}">¥{ind['CLOSE']:.2f}</div>
@@ -1096,8 +1208,24 @@ def generate_report(stock_analyses, delay_reason=""):
     
     html += """
     <p style="text-align: center; color: #999; font-size: 12px; margin-top: 30px;">
-        由 OpenClaw 自动生成 | 数据来源: AKShare (2026年最新数据)
+        由 OpenClaw 自动生成 | 数据来源: 腾讯财经
     </p>
+    
+    <!-- 1-5分评分说明 -->
+    <div style="background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 20px auto; max-width: 600px;">
+        <h4 style="margin: 0 0 10px 0; color: #333; font-size: 14px;">📊 1-5分评分说明</h4>
+        <table style="width: 100%; font-size: 12px; color: #666;">
+            <tr>
+                <td style="padding: 3px 0;"><span style="background: #4caf50; color: white; padding: 2px 8px; border-radius: 4px;">5分</span> 强烈看涨</td>
+                <td style="padding: 3px 0;"><span style="background: #8bc34a; color: white; padding: 2px 8px; border-radius: 4px;">4分</span> 看涨</td>
+                <td style="padding: 3px 0;"><span style="background: #ff9800; color: white; padding: 2px 8px; border-radius: 4px;">2分</span> 中性</td>
+                <td style="padding: 3px 0;"><span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 4px;">1分</span> 看跌</td>
+            </tr>
+        </table>
+        <p style="font-size: 11px; color: #999; margin: 8px 0 0 0;">
+            评分基于MACD/KDJ/RSI/均线等技术指标的买入/卖出信号数量计算
+        </p>
+    </div>
 </body>
 </html>
 """

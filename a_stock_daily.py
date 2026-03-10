@@ -16,6 +16,15 @@ from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# 加载 .env 文件
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
 
 # 设置 Gmail 密码
 os.environ.setdefault("GMAIL_SMTP_PASSWORD", "lepyvjiimtfmsqpv")
@@ -116,7 +125,7 @@ STOCKS = [
     {"code": "159672", "name": "消费ETF博时"},
 ]
 
-RECIPIENTS = ["9892890@qq.com", "42194972@qq.com"]
+RECIPIENTS = ["9892890@qq.com", "42194972@qq.com", "wlpyc@126.com"]
 # 默认发件：QQ邮箱 (主)，Gmail (备份)
 # 发送逻辑：先尝试QQ-SMTP，失败则自动切换到Gmail-SMTP
 QQ_SENDER_EMAIL = "9892890@qq.com"
@@ -690,8 +699,8 @@ def calculate_indicators(df):
     indicators['CHANGE'] = indicators['CLOSE'] - indicators['PREV_CLOSE']
     indicators['CHANGE_PCT'] = indicators['CHANGE'] / indicators['PREV_CLOSE'] * 100 if indicators['PREV_CLOSE'] != 0 else 0
     
-    # 换手率
-    indicators['TURNOVER'] = df['turnover'].iloc[-1] if 'turnover' in df.columns else 0
+    # 换手率: 由于数据源不提供流通股本,无法计算真实换手率,改用量能活跃度(基于量比)
+    indicators['TURNOVER'] = (indicators['VOL_RATIO'] - 1) * 10 if 'VOL_RATIO' in indicators else 0
     
     # 委比 (简化估算)
     indicators['WILL_CHANGE'] = indicators['CHANGE_PCT']
@@ -1096,7 +1105,9 @@ def generate_report(stock_analyses, delay_reason=""):
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 100%; margin: 0 auto; padding: 10px; background: #f5f5f5; }}
         .card {{ background: white; border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 100%; box-sizing: border-box; overflow-x: auto; }}
-        .stock-header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }}
+        .stock-header {{ display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }}
+        .stock-header-left {{ flex: 1; min-width: 0; }}
+        .stock-header-right {{ text-align: right; flex-shrink: 0; white-space: nowrap; }}
         .stock-name {{ font-size: 20px; font-weight: bold; color: #333; }}
         .stock-code {{ color: #666; font-size: 12px; }}
         .price {{ font-size: 20px; font-weight: bold; }}
@@ -1199,7 +1210,7 @@ def generate_report(stock_analyses, delay_reason=""):
         html += f"""
     <div class="card">
         <div class="stock-header">
-            <div>
+            <div class="stock-header-left">
                 <div class="stock-name">{analysis['name']}</div>
                 <div class="stock-code">{analysis['code']} | 数据日期: {analysis['data_date']}</div>
                 <div style="margin-top: 8px;">
@@ -1208,13 +1219,15 @@ def generate_report(stock_analyses, delay_reason=""):
                     </span>
                     <span style="color: #666; font-size: 12px; margin-left: 8px;">{score_detail}</span>
                 </div>
-                {f'<div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border-radius: 6px; border-left: 3px solid #2196f3;"><span style="color: #1976d2; font-size: 12px; font-weight: bold;">🤖 AI分析:</span> <span style="color: #333; font-size: 12px;">{ai_analysis}</span></div>' if ai_analysis else ''}
             </div>
-            <div style="text-align: right;">
+            <div class="stock-header-right">
                 <div class="price {price_class}">¥{ind['CLOSE']:.2f}</div>
                 <span class="change {change_class}">{change_symbol}{change_pct:.2f}%</span>
             </div>
         </div>
+        
+        <!-- AI分析独立区块，不再挤压价格显示 -->
+        {f'<div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 6px; border-left: 4px solid #2196f3;"><div style="color: #1976d2; font-size: 12px; font-weight: bold; margin-bottom: 5px;">🤖 AI分析</div><div style="color: #333; font-size: 12px; line-height: 1.5;">{ai_analysis}</div></div>' if ai_analysis else ''}
         
         <div class="summary">
             <div class="summary-item">
@@ -1226,8 +1239,8 @@ def generate_report(stock_analyses, delay_reason=""):
                 <div class="summary-label">量比 ({ind['VOL_RATIO']:.2f})</div>
             </div>
             <div class="summary-item">
-                <div class="summary-value">{ind['TURNOVER']:.2f}%</div>
-                <div class="summary-label">换手率</div>
+                <div class="summary-value">{ind['TURNOVER']:+.1f}%</div>
+                <div class="summary-label">量能活跃度</div>
             </div>
         </div>
         
@@ -1246,7 +1259,7 @@ def generate_report(stock_analyses, delay_reason=""):
         <table>
             <tr><th>指标</th><th>数值</th><th>说明</th></tr>
             <tr><td>量比</td><td>{ind['VOL_RATIO']:.2f}</td><td>{"明显放量" if ind['VOL_RATIO'] > 2.5 else "温和放量" if ind['VOL_RATIO'] > 1.5 else "正常" if ind['VOL_RATIO'] > 0.8 else "缩量"}</td></tr>
-            <tr><td>换手率</td><td>{ind['TURNOVER']:.2f}%</td><td>{"高活跃" if ind['TURNOVER'] > 5 else "正常" if ind['TURNOVER'] > 3 else "低活跃"}</td></tr>
+            <tr><td>量能活跃度</td><td>{ind['TURNOVER']:+.1f}%</td><td>{"极度活跃" if ind['TURNOVER'] > 10 else "活跃" if ind['TURNOVER'] > 5 else "正常" if ind['TURNOVER'] > 0 else "低迷"}</td></tr>
             <tr><td>内盘/外盘</td><td>{ind['INNER_DISK']:,.0f} / {ind['OUTER_DISK']:,.0f}</td><td>{"多方占优" if ind['INNER_DISK'] > ind['OUTER_DISK'] else "空方占优"}</td></tr>
         </table>
         

@@ -222,8 +222,14 @@ def _get_stock_data_eastmoney(stock_code, days=120):
         else:
             em_code = f"0.{stock_code}"
         
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days*2)).strftime('%Y%m%d')
+        now = datetime.now()
+        # Bug fix: 市场未收盘时(15:00前)且今天为交易日,East Money API不返回当天K线
+        # 使用昨天作为end_date以确保数据完整性
+        if now.hour < 15 and is_trading_day():
+            end_date = (now - timedelta(days=1)).strftime('%Y%m%d')
+        else:
+            end_date = now.strftime('%Y%m%d')
+        start_date = (now - timedelta(days=days*2)).strftime('%Y%m%d')
         
         url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
@@ -1086,8 +1092,7 @@ def send_via_qq_smtp(html_report, subject):
     """通过 QQ邮箱 SMTP 发送"""
     import smtplib
     from email.mime.multipart import MIMEMultipart
-from email.mime.image import MIMEImage
-
+    from email.mime.image import MIMEImage
     from email.mime.text import MIMEText
     
     qq_email = "9892890@qq.com"
@@ -1115,8 +1120,7 @@ def send_via_gmail(html_report, subject_prefix=""):
     """通过 Gmail SMTP 发送"""
     import smtplib
     from email.mime.multipart import MIMEMultipart
-from email.mime.image import MIMEImage
-
+    from email.mime.image import MIMEImage
     from email.mime.text import MIMEText
     
     smtp_password = gmail_smtp_password if gmail_smtp_password else os.environ.get("GMAIL_SMTP_PASSWORD", "")
@@ -1179,24 +1183,36 @@ def main(is_test=False, delay_reason=""):
     current_time = datetime.now()
     time_limit = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
     
+    # 检查是否在9:00-9:30时间段内（这个时间段不显示抱歉通知）
+    is_within_930_window = False
+    time_900 = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+    time_930 = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+    if time_900 <= current_time <= time_930:
+        is_within_930_window = True
+        print(f"当前时间 {current_time.strftime('%H:%M')} 处于9:00-9:30窗口期，不显示抱歉通知")
+
     # 如果没有传入延迟原因，自动检测
     if not delay_reason:
         delay_reasons = []
-        
-        # 检查是否超过9:30
+
+        # 只有在9:30之后才检测超时，9:00-9:30内不算延迟
         if current_time > time_limit:
             delay_reasons.append(f"当前时间 {current_time.strftime('%H:%M')} 已超过9:30收盘时报送")
-        
+
         # 检查是否有错误
         if errors:
             error_details = "; ".join(errors[:5])  # 限制显示前5个错误
             if len(errors) > 5:
                 error_details += f" 等共{len(errors)}个问题"
             delay_reasons.append(f"数据收集中出现{len(errors)}个问题: {error_details}")
-        
+
         if delay_reasons:
             delay_reason = " | ".join(delay_reasons)
-    
+
+    # 9:00-9:30窗口期内，不显示抱歉通知
+    if is_within_930_window:
+        delay_reason = ""
+
     if not analyses:
         print("❌ 没有获取到任何数据")
         return

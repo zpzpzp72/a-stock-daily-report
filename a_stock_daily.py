@@ -1364,20 +1364,28 @@ def generate_report(stock_analyses, delay_reason=""):
 
 
 def send_email(html_report, subject_prefix="", skip_charts=False):
-    """发送邮件 - 先用tencent-exmail，失败则用Gmail"""
+    """发送邮件 - 先用QQ邮箱SMTP，失败则用Gmail，幂等保证不重复发送"""
+    import os as _os
+
+    # ── 幂等锁：防止同一运行日内重复发送 ──────────────────────────
+    lock_file = f"/tmp/a_stock_sent_{datetime.now().strftime('%Y%m%d')}.lock"
+    if _os.path.exists(lock_file):
+        print(f"⏭️  今日报告已发送过 (lock={lock_file})，跳过邮件发送")
+        return html_report
+
     # 生成各股票走势图
     print("生成股票走势图...")
     stock_codes = [s["code"] for s in STOCKS]
     stock_names = [s["name"] for s in STOCKS]
     chart_paths = {}
-    
+
     # 始终生成图表
     for code, name in zip(stock_codes, stock_names):
         chart_path = generate_stock_chart(code, name)
         if chart_path:
             chart_paths[code] = chart_path
             print(f"  ✅ {name} 走势图已生成")
-    
+
     # 添加走势图图片到HTML (嵌入base64)
     if chart_paths:
         for code, chart_path in chart_paths.items():
@@ -1391,18 +1399,40 @@ def send_email(html_report, subject_prefix="", skip_charts=False):
                     html_report = html_report.replace(placeholder, img_tag)
             except Exception as e:
                 print(f"  添加图片失败: {e}")
-    
+
     subject = f"{subject_prefix}A股每日观察 - {datetime.now().strftime('%Y-%m-%d')}"
-    
-    # 方法1: 尝试用 tencent-exmail (QQ邮箱 SMTP)
-    print("尝试使用 tencent-exmail (QQ邮箱) 发送...")
-    if send_via_qq_smtp(html_report, subject):
-        print("✅ 邮件发送成功 (QQ邮箱)!")
-        return html_report
-    
-    # 方法2: 回退到 Gmail
-    print("QQ邮箱发送失败，尝试使用 Gmail...")
-    send_via_gmail(html_report, subject_prefix, chart_paths)
+
+    # 方法1: 尝试用 QQ邮箱 SMTP
+    sent_ok = False
+    print("尝试使用 QQ邮箱 SMTP 发送...")
+    try:
+        if send_via_qq_smtp(html_report, subject):
+            print("✅ 邮件发送成功 (QQ邮箱)!")
+            sent_ok = True
+    except Exception as e:
+        print(f"  QQ邮箱发送异常: {e}，将尝试 Gmail 备用路径")
+
+    # 方法2: 回退到 Gmail（仅在 QQ 失败时执行）
+    if not sent_ok:
+        print("QQ邮箱未成功，尝试使用 Gmail...")
+        try:
+            if send_via_gmail(html_report, subject_prefix, chart_paths):
+                print("✅ 邮件发送成功 (Gmail)!")
+                sent_ok = True
+            else:
+                print("❌ Gmail 发送也失败了")
+        except Exception as e:
+            print(f"  Gmail 发送异常: {e}")
+
+    # 发送成功则创建锁文件，防止本日内重复发送
+    if sent_ok:
+        try:
+            with open(lock_file, 'w') as f:
+                f.write(datetime.now().isoformat())
+            print(f"🔒 锁文件已创建: {lock_file}")
+        except Exception as e:
+            print(f"  警告：无法创建锁文件 {lock_file}: {e}")
+
     return html_report
 
 

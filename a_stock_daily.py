@@ -116,7 +116,7 @@ STOCKS = [
     {"code": "300666", "name": "江丰电子"},
     {"code": "000778", "name": "新兴铸管"},
     {"code": "601990", "name": "南京证券"},
-    {"code": "001369", "name": "双欣环保"},
+    {"code": "603360", "name": "双欣环保"},
     {"code": "600121", "name": "郑州煤电"},
     {"code": "601398", "name": "工商银行"},
     {"code": "159518", "name": "标普油气ETF嘉实"},
@@ -376,14 +376,8 @@ def _get_stock_data_eastmoney(stock_code, days=120):
         else:
             em_code = f"0.{stock_code}"
         
-        now = datetime.now()
-        # Bug fix: 市场未收盘时(15:00前)且今天为交易日,EastMoney API不返回当天K线
-        # 使用昨天作为end_date以确保数据完整性
-        if now.hour < 15 and is_trading_day():
-            end_date = (now - timedelta(days=1)).strftime('%Y%m%d')
-        else:
-            end_date = now.strftime('%Y%m%d')
-        start_date = (now - timedelta(days=days*2)).strftime('%Y%m%d')
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=days*2)).strftime('%Y%m%d')
         
         url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {

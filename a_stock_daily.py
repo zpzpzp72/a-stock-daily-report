@@ -1506,8 +1506,9 @@ def main(is_test=False, delay_reason=""):
         if current_time > time_limit:
             delay_reasons.append(f"当前时间 {current_time.strftime('%H:%M')} 已超过9:30收盘时报送")
         
-        # 检查是否有错误
-        if errors:
+        # 检查是否有错误（9:30前预生成报告时不显示抱歉信息）
+        is_pre_market = current_time < time_limit
+        if errors and not is_pre_market:
             error_details = "; ".join(errors[:5])  # 限制显示前5个错误
             if len(errors) > 5:
                 error_details += f" 等共{len(errors)}个问题"
